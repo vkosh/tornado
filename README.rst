@@ -1,13 +1,5 @@
-.. title:: Tornado Web Server
-
-.. meta::
-    :google-site-verification: g4bVhgwbVO1d9apCUsT-eKlApg31Cygbp8VGZY8Rf0g
-
-|Tornado Web Server|
-====================
-
-.. |Tornado Web Server| image:: tornado.png
-    :alt: Tornado Web Server
+Tornado Web Server
+==================
 
 `Tornado <http://www.tornadoweb.org>`_ is a Python web framework and
 asynchronous networking library, originally developed at `FriendFeed
@@ -21,13 +13,10 @@ applications that require a long-lived connection to each user.
 Quick links
 -----------
 
-* :doc:`Documentation <documentation>`
-* |Download current version|: :current_tarball:`z` (:doc:`release notes <releases>`)
+* `Documentation <http://www.tornadoweb.org/en/stable/>`_
 * `Source (github) <https://github.com/facebook/tornado>`_
 * `Mailing list <http://groups.google.com/group/python-tornado>`_
 * `Wiki <https://github.com/facebook/tornado/wiki/Links>`_
-
-.. |Download current version| replace:: Download version |version|
 
 Hello, world
 ------------
@@ -60,18 +49,19 @@ Installation
 
     pip install tornado
 
-Tornado is listed in `PyPI <http://pypi.python.org/pypi/tornado>`_ and
+Tornado is listed in `PyPI <http://pypi.python.org/pypi/tornado/>`_ and
 can be installed with ``pip`` or ``easy_install``.  Note that the
 source distribution includes demo applications that are not present
 when Tornado is installed in this way, so you may wish to download a
 copy of the source tarball as well.
 
-**Manual installation**: Download :current_tarball:`z`:
+**Manual installation**: Download the latest source from `PyPI
+<http://pypi.python.org/pypi/tornado/>`_.
 
 .. parsed-literal::
 
-    tar xvzf tornado-|version|.tar.gz
-    cd tornado-|version|
+    tar xvzf tornado-$VERSION.tar.gz
+    cd tornado-$VERSION
     python setup.py build
     sudo python setup.py install
 
@@ -87,7 +77,7 @@ features may require one of the following libraries:
   versions of Python)
 * `concurrent.futures <https://pypi.python.org/pypi/futures>`_ is the
   recommended thread pool for use with Tornado and enables the use of
-  `~tornado.netutil.ThreadedResolver`.  It is needed only on Python 2;
+  ``tornado.netutil.ThreadedResolver``.  It is needed only on Python 2;
   Python 3 includes this package in the standard library.
 * `pycurl <http://pycurl.sourceforge.net>`_ is used by the optional
   ``tornado.curl_httpclient``.  Libcurl version 7.18.2 or higher is required;
@@ -103,12 +93,9 @@ features may require one of the following libraries:
 
 **Platforms**: Tornado should run on any Unix-like platform, although
 for the best performance and scalability only Linux (with ``epoll``)
-and BSD (with ``kqueue``) are recommended for production deployment
-(even though Mac OS X is derived from BSD and supports kqueue, its
-networking performance is generally poor so it is recommended only for
-development use).  Tornado will also run on Windows, although this
-configuration is not officially supported and is recommended only for
-development use.
+and BSD (with ``kqueue``) are recommended (even though Mac OS X is
+derived from BSD and supports kqueue, its networking performance is
+generally poor so it is recommended only for development use).
 
 Discussion and support
 ----------------------
@@ -127,8 +114,3 @@ the `Apache License, Version 2.0
 
 This web site and all documentation is licensed under `Creative
 Commons 3.0 <http://creativecommons.org/licenses/by/3.0/>`_.
-
-.. toctree::
-   :hidden:
-
-   documentation

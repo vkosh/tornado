@@ -120,16 +120,6 @@ class TestIOStreamMixin(object):
 
         def accept_callback(connection, address):
             streams[0] = self._make_server_iostream(connection, **kwargs)
-            if isinstance(streams[0], SSLIOStream):
-                # HACK: The SSL handshake won't complete (and
-                # therefore the client connect callback won't be
-                # run)until the server side has tried to do something
-                # with the connection.  For these tests we want both
-                # sides to connect before we do anything else with the
-                # connection, so we must cause some dummy activity on the
-                # server.  If this turns out to be useful for real apps
-                # it should have a cleaner interface.
-                streams[0]._add_io_state(IOLoop.READ)
             self.stop()
 
         def connect_callback():
@@ -156,7 +146,7 @@ class TestIOStreamMixin(object):
             self.fail()
         server.read_until_close(callback=closed_callback,
                                 streaming_callback=self.stop)
-        self.io_loop.add_timeout(self.io_loop.time() + 0.01, self.stop)
+        # self.io_loop.add_timeout(self.io_loop.time() + 0.01, self.stop)
         data = self.wait()
         self.assertEqual(data, b"efgh")
         server.close()
@@ -261,19 +251,24 @@ class TestIOStreamMixin(object):
         server, client = self.make_iostream_pair()
         try:
             chunks = []
+            closed = [False]
 
-            def callback(data):
+            def streaming_callback(data):
                 chunks.append(data)
                 self.stop()
-            client.read_until_close(callback=callback,
-                                    streaming_callback=callback)
+            def close_callback(data):
+                assert not data, data
+                closed[0] = True
+                self.stop()
+            client.read_until_close(callback=close_callback,
+                                    streaming_callback=streaming_callback)
             server.write(b"1234")
-            self.wait()
-            server.write(b"5678")
+            self.wait(condition=lambda: len(chunks) == 1)
+            server.write(b"5678", self.stop)
             self.wait()
             server.close()
-            self.wait()
-            self.assertEqual(chunks, [b"1234", b"5678", b""])
+            self.wait(condition=lambda: closed[0])
+            self.assertEqual(chunks, [b"1234", b"5678"])
         finally:
             server.close()
             client.close()
@@ -537,4 +532,22 @@ class TestPipeIOStream(AsyncTestCase):
         data = self.wait()
         self.assertEqual(data, b"ld")
 
+        rs.close()
+
+    def test_pipe_iostream_big_write(self):
+        r, w = os.pipe()
+
+        rs = PipeIOStream(r, io_loop=self.io_loop)
+        ws = PipeIOStream(w, io_loop=self.io_loop)
+
+        NUM_BYTES = 1048576
+
+        # Write 1MB of data, which should fill the buffer
+        ws.write(b"1" * NUM_BYTES)
+
+        rs.read_bytes(NUM_BYTES, self.stop)
+        data = self.wait()
+        self.assertEqual(data, b"1" * NUM_BYTES)
+
+        ws.close()
         rs.close()

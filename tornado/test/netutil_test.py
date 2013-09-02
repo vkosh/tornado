@@ -53,7 +53,7 @@ class ThreadedResolverTest(AsyncTestCase, _ResolverTestMixin):
         self.resolver = ThreadedResolver(io_loop=self.io_loop)
 
     def tearDown(self):
-        self.resolver.executor.shutdown()
+        self.resolver.close()
         super(ThreadedResolverTest, self).tearDown()
 
 
@@ -82,3 +82,7 @@ class IsValidIPTest(unittest.TestCase):
         self.assertTrue(not is_valid_ip('localhost'))
         self.assertTrue(not is_valid_ip('4.4.4.4<'))
         self.assertTrue(not is_valid_ip(' 127.0.0.1'))
+        self.assertTrue(not is_valid_ip(''))
+        self.assertTrue(not is_valid_ip(' '))
+        self.assertTrue(not is_valid_ip('\n'))
+        self.assertTrue(not is_valid_ip('\x00'))

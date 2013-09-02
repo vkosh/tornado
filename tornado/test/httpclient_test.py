@@ -14,9 +14,10 @@ from tornado.httpclient import HTTPRequest, HTTPResponse, _RequestProxy, HTTPErr
 from tornado.httpserver import HTTPServer
 from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
+from tornado.log import gen_log
 from tornado import netutil
 from tornado.stack_context import ExceptionStackContext, NullContext
-from tornado.testing import AsyncHTTPTestCase, bind_unused_port, gen_test
+from tornado.testing import AsyncHTTPTestCase, bind_unused_port, gen_test, ExpectLog
 from tornado.test.util import unittest
 from tornado.util import u, bytes_type
 from tornado.web import Application, RequestHandler, url
@@ -82,6 +83,14 @@ class ContentLength304Handler(RequestHandler):
         pass
 
 
+class AllMethodsHandler(RequestHandler):
+    SUPPORTED_METHODS = RequestHandler.SUPPORTED_METHODS + ('OTHER',)
+
+    def method(self):
+        self.write(self.request.method)
+
+    get = post = put = delete = options = patch = other = method
+
 # These tests end up getting run redundantly: once here with the default
 # HTTPClient implementation, and then again in each implementation's own
 # test suite.
@@ -98,6 +107,7 @@ class HTTPClientCommonTestCase(AsyncHTTPTestCase):
             url("/echopost", EchoPostHandler),
             url("/user_agent", UserAgentHandler),
             url("/304_with_content_length", ContentLength304Handler),
+            url("/all_methods", AllMethodsHandler),
         ], gzip=True)
 
     def test_hello_world(self):
@@ -190,6 +200,23 @@ Transfer-Encoding: chunked
         self.assertEqual(self.fetch("/auth", auth_username="Aladdin",
                                     auth_password="open sesame").body,
                          b"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==")
+
+    def test_basic_auth_explicit_mode(self):
+        self.assertEqual(self.fetch("/auth", auth_username="Aladdin",
+                                    auth_password="open sesame",
+                                    auth_mode="basic").body,
+                         b"Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==")
+
+    def test_unsupported_auth_mode(self):
+        # curl and simple clients handle errors a bit differently; the
+        # important thing is that they don't fall back to basic auth
+        # on an unknown mode.
+        with ExpectLog(gen_log, "uncaught exception", required=False):
+            with self.assertRaises((ValueError, HTTPError)):
+                response = self.fetch("/auth", auth_username="Aladdin",
+                                      auth_password="open sesame",
+                                      auth_mode="asdf")
+                response.rethrow()
 
     def test_follow_redirect(self):
         response = self.fetch("/countdown/2", follow_redirects=False)
@@ -334,6 +361,32 @@ Transfer-Encoding: chunked
             self.assertEqual(e.code, 404)
             self.assertEqual(e.response.code, 404)
 
+    @gen_test
+    def test_reuse_request_from_response(self):
+        # The response.request attribute should be an HTTPRequest, not
+        # a _RequestProxy.
+        # This test uses self.http_client.fetch because self.fetch calls
+        # self.get_url on the input unconditionally.
+        url = self.get_url('/hello')
+        response = yield self.http_client.fetch(url)
+        self.assertEqual(response.request.url, url)
+        self.assertTrue(isinstance(response.request, HTTPRequest))
+        response2 = yield self.http_client.fetch(response.request)
+        self.assertEqual(response2.body, b'Hello world!')
+
+    def test_all_methods(self):
+        for method in ['GET', 'DELETE', 'OPTIONS']:
+            response = self.fetch('/all_methods', method=method)
+            self.assertEqual(response.body, utf8(method))
+        for method in ['POST', 'PUT', 'PATCH']:
+            response = self.fetch('/all_methods', method=method, body=b'')
+            self.assertEqual(response.body, utf8(method))
+        response = self.fetch('/all_methods', method='HEAD')
+        self.assertEqual(response.body, b'')
+        response = self.fetch('/all_methods', method='OTHER',
+                              allow_nonstandard_methods=True)
+        self.assertEqual(response.body, b'OTHER')
+
 
 class RequestProxyTest(unittest.TestCase):
     def test_request_set(self):
@@ -400,6 +453,7 @@ class SyncHTTPClientTest(unittest.TestCase):
     def tearDown(self):
         self.server_ioloop.add_callback(self.server_ioloop.stop)
         self.server_thread.join()
+        self.http_client.close()
         self.server_ioloop.close(all_fds=True)
 
     def get_url(self, path):

@@ -14,6 +14,7 @@ from tornado.testing import AsyncHTTPTestCase, AsyncHTTPSTestCase, AsyncTestCase
 from tornado.test.util import unittest
 from tornado.util import u, bytes_type
 from tornado.web import Application, RequestHandler, asynchronous
+from contextlib import closing
 import datetime
 import os
 import shutil
@@ -183,22 +184,23 @@ class HTTPConnectionTest(AsyncHTTPTestCase):
         return Application(self.get_handlers())
 
     def raw_fetch(self, headers, body):
-        client = SimpleAsyncHTTPClient(self.io_loop)
-        conn = RawRequestHTTPConnection(
-            self.io_loop, client,
-            httpclient._RequestProxy(
-                httpclient.HTTPRequest(self.get_url("/")),
-                dict(httpclient.HTTPRequest._DEFAULTS)),
-            None, self.stop,
-            1024 * 1024, Resolver(io_loop=self.io_loop))
-        conn.set_request(
-            b"\r\n".join(headers +
-                         [utf8("Content-Length: %d\r\n" % len(body))]) +
-            b"\r\n" + body)
-        response = self.wait()
-        client.close()
-        response.rethrow()
-        return response
+        with closing(Resolver(io_loop=self.io_loop)) as resolver:
+            with closing(SimpleAsyncHTTPClient(self.io_loop,
+                                               resolver=resolver)) as client:
+                conn = RawRequestHTTPConnection(
+                    self.io_loop, client,
+                    httpclient._RequestProxy(
+                        httpclient.HTTPRequest(self.get_url("/")),
+                        dict(httpclient.HTTPRequest._DEFAULTS)),
+                    None, self.stop,
+                    1024 * 1024, resolver)
+                conn.set_request(
+                    b"\r\n".join(headers +
+                                 [utf8("Content-Length: %d\r\n" % len(body))]) +
+                    b"\r\n" + body)
+                response = self.wait()
+                response.rethrow()
+                return response
 
     def test_multipart_form(self):
         # Encodings here are tricky:  Headers are latin1, bodies can be
@@ -260,6 +262,7 @@ class EchoHandler(RequestHandler):
 
     def post(self):
         self.write(recursive_unicode(self.request.arguments))
+
 
 class TypeCheckHandler(RequestHandler):
     def prepare(self):
@@ -341,20 +344,50 @@ class HTTPServerTest(AsyncHTTPTestCase):
         self.assertEqual(200, response.code)
         self.assertEqual(json_decode(response.body), {})
 
-    def test_empty_request(self):
-        stream = IOStream(socket.socket(), io_loop=self.io_loop)
-        stream.connect(('localhost', self.get_http_port()), self.stop)
+
+class HTTPServerRawTest(AsyncHTTPTestCase):
+    def get_app(self):
+        return Application([
+            ('/echo', EchoHandler),
+        ])
+
+    def setUp(self):
+        super(HTTPServerRawTest, self).setUp()
+        self.stream = IOStream(socket.socket())
+        self.stream.connect(('localhost', self.get_http_port()), self.stop)
         self.wait()
-        stream.close()
+
+    def tearDown(self):
+        self.stream.close()
+        super(HTTPServerRawTest, self).tearDown()
+
+    def test_empty_request(self):
+        self.stream.close()
         self.io_loop.add_timeout(datetime.timedelta(seconds=0.001), self.stop)
         self.wait()
+
+    def test_malformed_first_line(self):
+        with ExpectLog(gen_log, '.*Malformed HTTP request line'):
+            self.stream.write(b'asdf\r\n\r\n')
+            # TODO: need an async version of ExpectLog so we don't need
+            # hard-coded timeouts here.
+            self.io_loop.add_timeout(datetime.timedelta(seconds=0.01),
+                                     self.stop)
+            self.wait()
+
+    def test_malformed_headers(self):
+        with ExpectLog(gen_log, '.*Malformed HTTP headers'):
+            self.stream.write(b'GET / HTTP/1.0\r\nasdf\r\n\r\n')
+            self.io_loop.add_timeout(datetime.timedelta(seconds=0.01),
+                                     self.stop)
+            self.wait()
 
 
 class XHeaderTest(HandlerBaseTestCase):
     class Handler(RequestHandler):
         def get(self):
             self.write(dict(remote_ip=self.request.remote_ip,
-                remote_protocol=self.request.protocol))
+                            remote_protocol=self.request.protocol))
 
     def get_httpserver_options(self):
         return dict(xheaders=True)
@@ -367,14 +400,29 @@ class XHeaderTest(HandlerBaseTestCase):
             self.fetch_json("/", headers=valid_ipv4)["remote_ip"],
             "4.4.4.4")
 
+        valid_ipv4_list = {"X-Forwarded-For": "127.0.0.1, 4.4.4.4"}
+        self.assertEqual(
+            self.fetch_json("/", headers=valid_ipv4_list)["remote_ip"],
+            "4.4.4.4")
+
         valid_ipv6 = {"X-Real-IP": "2620:0:1cfe:face:b00c::3"}
         self.assertEqual(
             self.fetch_json("/", headers=valid_ipv6)["remote_ip"],
             "2620:0:1cfe:face:b00c::3")
 
+        valid_ipv6_list = {"X-Forwarded-For": "::1, 2620:0:1cfe:face:b00c::3"}
+        self.assertEqual(
+            self.fetch_json("/", headers=valid_ipv6_list)["remote_ip"],
+            "2620:0:1cfe:face:b00c::3")
+
         invalid_chars = {"X-Real-IP": "4.4.4.4<script>"}
         self.assertEqual(
             self.fetch_json("/", headers=invalid_chars)["remote_ip"],
+            "127.0.0.1")
+
+        invalid_chars_list = {"X-Forwarded-For": "4.4.4.4, 5.5.5.5<script>"}
+        self.assertEqual(
+            self.fetch_json("/", headers=invalid_chars_list)["remote_ip"],
             "127.0.0.1")
 
         invalid_host = {"X-Real-IP": "www.google.com"}

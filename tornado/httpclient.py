@@ -33,7 +33,7 @@ import functools
 import time
 import weakref
 
-from tornado.concurrent import Future
+from tornado.concurrent import TracebackFuture
 from tornado.escape import utf8
 from tornado import httputil, stack_context
 from tornado.ioloop import IOLoop
@@ -53,7 +53,7 @@ class HTTPClient(object):
             print response.body
         except httpclient.HTTPError as e:
             print "Error:", e
-        httpclient.close()
+        http_client.close()
     """
     def __init__(self, async_client_class=None, **kwargs):
         self._io_loop = IOLoop()
@@ -144,9 +144,16 @@ class AsyncHTTPClient(Configurable):
 
     def close(self):
         """Destroys this HTTP client, freeing any file descriptors used.
-        Not needed in normal use, but may be helpful in unittests that
-        create and destroy http clients.  No other methods may be called
-        on the `AsyncHTTPClient` after ``close()``.
+
+        This method is **not needed in normal use** due to the way
+        that `AsyncHTTPClient` objects are transparently reused.
+        ``close()`` is generally only necessary when either the
+        `.IOLoop` is also being closed, or the ``force_instance=True``
+        argument was used when creating the `AsyncHTTPClient`.
+
+        No other methods may be called on the `AsyncHTTPClient` after
+        ``close()``.
+
         """
         if self._async_clients().get(self.io_loop) is self:
             del self._async_clients()[self.io_loop]
@@ -174,7 +181,7 @@ class AsyncHTTPClient(Configurable):
         # where normal dicts get converted to HTTPHeaders objects.
         request.headers = httputil.HTTPHeaders(request.headers)
         request = _RequestProxy(request, self.defaults)
-        future = Future()
+        future = TracebackFuture()
         if callback is not None:
             callback = stack_context.wrap(callback)
 
@@ -242,7 +249,7 @@ class HTTPRequest(object):
         validate_cert=True)
 
     def __init__(self, url, method="GET", headers=None, body=None,
-                 auth_username=None, auth_password=None,
+                 auth_username=None, auth_password=None, auth_mode=None,
                  connect_timeout=None, request_timeout=None,
                  if_modified_since=None, follow_redirects=None,
                  max_redirects=None, user_agent=None, use_gzip=None,
@@ -258,9 +265,14 @@ class HTTPRequest(object):
         :arg string url: URL to fetch
         :arg string method: HTTP method, e.g. "GET" or "POST"
         :arg headers: Additional HTTP headers to pass on the request
+        :arg body: HTTP body to pass on the request
         :type headers: `~tornado.httputil.HTTPHeaders` or `dict`
-        :arg string auth_username: Username for HTTP "Basic" authentication
-        :arg string auth_password: Password for HTTP "Basic" authentication
+        :arg string auth_username: Username for HTTP authentication
+        :arg string auth_password: Password for HTTP authentication
+        :arg string auth_mode: Authentication mode; default is "basic".
+           Allowed values are implementation-defined; ``curl_httpclient``
+           supports "basic" and "digest"; ``simple_httpclient`` only supports
+           "basic"
         :arg float connect_timeout: Timeout for initial connection in seconds
         :arg float request_timeout: Timeout for entire request in seconds
         :arg if_modified_since: Timestamp for ``If-Modified-Since`` header
@@ -306,6 +318,9 @@ class HTTPRequest(object):
            ``simple_httpclient`` and true in ``curl_httpclient``
         :arg string client_key: Filename for client SSL key, if any
         :arg string client_cert: Filename for client SSL certificate, if any
+
+        .. versionadded:: 3.1
+           The ``auth_mode`` argument.
         """
         if headers is None:
             headers = httputil.HTTPHeaders()
@@ -322,6 +337,7 @@ class HTTPRequest(object):
         self.body = utf8(body)
         self.auth_username = auth_username
         self.auth_password = auth_password
+        self.auth_mode = auth_mode
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
         self.follow_redirects = follow_redirects
@@ -373,7 +389,10 @@ class HTTPResponse(object):
     def __init__(self, request, code, headers=None, buffer=None,
                  effective_url=None, error=None, request_time=None,
                  time_info=None, reason=None):
-        self.request = request
+        if isinstance(request, _RequestProxy):
+            self.request = request.request
+        else:
+            self.request = request
         self.code = code
         self.reason = reason or httputil.responses.get(code, "Unknown")
         if headers is not None:
